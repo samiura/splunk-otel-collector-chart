@@ -125,8 +125,8 @@ splunkObservability:
 
   # Option to send Kubernetes events to Splunk Observability Infrastructure Monitoring as data events:
   # https://docs.splunk.com/Observability/alerts-detectors-notifications/view-data-events.html
-  # To send Kubernetes events to Splunk Observability Log Observer, set both clusterReceiver.eventsEnabled and
-  # splunkObservability.logsEnabled to true.
+  # To send Kubernetes events to Splunk Observability Log Observer, configure clusterReceiver.k8sObjects
+  # and set splunkObservability.logsEnabled to true.
   infrastructureMonitoringEventsEnabled: false
 
   # This option just enables the shared pipeline for logs and profiling data.
@@ -350,13 +350,19 @@ agent:
       memory: 500Mi
 
   # To collect container logs and journald logs, it will run the agent as a root user.
-  # To run it as non root user, uncomment below `securityContext` options.
+  # To run it as non root user, change runAsUser and runAsGroup to non-zero value (e.g. 999) and change runAsNonRoot to true.
   # Setting runAsUser and runAsGroup to a non root user enables an init container that patches group
   # permissions of container logs directories on the host filesystem to make logs readable by this non root user.
-
-  securityContext: {}
-  #   runAsUser: 20000
-  #   runAsGroup: 20000
+  # NOTE: Running this container as a non-root user doesn't work with openshift cluser or cri-o runntime.
+  # See https://github.com/cri-o/cri-o/issues/6519 for more details.
+  securityContext:
+    readOnlyRootFilesystem: true
+    allowPrivilegeEscalation: false
+    seccompProfile:
+      type: RuntimeDefault
+    runAsUser: 0
+    runAsGroup: 0
+    runAsNonRoot: false
 
   # Specifies DaemonSet update strategy.
   # Possible values: "OnDelete" and "RollingUpdate".
@@ -430,6 +436,55 @@ clusterReceiver:
   # The receiver currently is in alpha state which means that events format might change over time.
   # Once the receiver is stabilized, it'll be enabled by default in this helm chart
   eventsEnabled: false
+
+  # Kubernetes objects collection using OpenTelemetry Kubernetes Object Receiver
+  # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/k8sobjectsreceiver
+  # This option requires `logsEnabled` to be set to `true` for either `splunkObservability` or `splunkPlatform`
+  # depending on where you want to send the events. Otherwise, this option will not have any effect.
+  # The receiver currently is in alpha state which means that events format might change over time.
+  # Once the receiver is stabilized, it'll be enabled by default in this helm chart
+
+  #
+  # == Schema ==
+  # ```
+  # k8sObjects:
+  #   - <objectDefinition>
+  # ```
+  # Each `objectDefinition` has the following fields:
+  # * mode:
+  #     define in which way it collects this type of object, either "pull" or "watch".
+  #     - "poll" mode will read all objects of this type use the list API at an interval. Default mode.
+  #     - "watch" mode will setup a long connection using the watch API to just get updates.
+  # * name: [REQUIRED]
+  #     name of the object, e.g. `pods`, `namespaces`.
+  # * namespace:
+  #     only collects objects from the specified namespace, by default it's all namespaces
+  # * labelSelector:
+  #     select objects by label(s)
+  # * fieldSelector:
+  #     select objects by field(s)
+  # * interval:
+  #     the interval at which object is pulled, default 60 seconds.
+  #     Only useful for "pull" mode.
+  #
+  #
+  # == Example ==
+  # ```
+  #  k8sObjects:
+  #    - name: pods
+  #      mode: pull
+  #      label_selector: environment in (production),tier in (frontend)
+  #      field_selector: status.phase=Running
+  #      interval: 15m
+  #    - name: events
+  #      mode: watch
+  #      group: events.k8s.io
+  #      namespaces: [default]
+  # ```
+  #
+  # The configuration format in details is described here:
+  # https://github.com/open-telemetry/opentelemetry-collector-contrib/tree/main/receiver/k8sobjectsreceiver
+  k8sObjects: []
 
   # k8s cluster receiver extra pod labels
   podLabels: {}
@@ -557,8 +612,23 @@ fluentd:
       cpu: 100m
       memory: 200Mi
 
+  # To collect container logs and journald logs, it will run the fluentd sidecar as a root user.
+  # To run it as non root user, change runAsUser and runAsGroup to non-zero value (e.g. 999) and change runAsNonRoot to true.
+  # Setting runAsUser and runAsGroup to a non root user enables an init container that patches group
+  # permissions of container logs directories on the host filesystem to make logs readable by this non root user.
+  # NOTE: Running this container as a non-root user doesn't work with openshift cluser or cri-o runntime.
+  # See https://github.com/cri-o/cri-o/issues/6519 for more details.
+
   securityContext:
     runAsUser: 0
+  #  securityContext:
+  #  readOnlyRootFilesystem: true
+  #  allowPrivilegeEscalation: false
+  #  seccompProfile:
+  #    type: RuntimeDefault
+  #  runAsUser: 999
+  #  runAsGroup: 999
+  #  runAsNonRoot: true
 
   # Extra enviroment variables to be set in the FluentD container
   extraEnvs: []
@@ -613,7 +683,7 @@ fluentd:
     # Prefix for pos_file tail source parameter
     # Can be used if you want to run multiple instances of fluentd on the same host
     # https://docs.fluentd.org/input/tail#pos_file-highly-recommended
-    posFilePrefix: /var/log/splunk-fluentd
+    posFilePrefix: /var/addon/splunk/fluent_pos/splunk-fluentd
 
     # `customFilters` defines the custom filters to be used.
     # This section can be used to define custom filters using plugins like https://github.com/splunk/fluent-plugin-jq
